@@ -63,7 +63,6 @@ public class Gadget extends Activity {
     	super.onDestroy();
     	if (mBound)
     	{
-    		mService.stopServer();
     		this.getApplicationContext().unbindService(mConnection);
     	}
     }

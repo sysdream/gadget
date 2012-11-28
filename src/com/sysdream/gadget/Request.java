@@ -1,7 +1,15 @@
 package com.sysdream.gadget;
 
+import java.lang.reflect.Method;
+
+import android.util.Log;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
+import com.sysdream.fino.IInspectionService;
 
 /**
  * Provide a small RPC message format required to communicate
@@ -10,36 +18,6 @@ import com.google.gson.GsonBuilder;
  * @author <a href="mailto:d.cauquil@sysdream.com>Damien Cauquil</a>
  * @version 1.0
  */
-
-/**
- * Available RPC methods
- */
-enum RequestMethod {
-	LIST_APPS,			/* List Fino-enabled applications */
-	GET_EP,				/* Get entry points */
-	FILTER_EP,			/* Filter entry points */
-	GET_FIELDS,			/* Get fields */
-	GET_METHODS,		/* Get methods */
-	GET_PATH,			/* Get path */
-	GET_TYPE,			/* Get type */
-	GET_VALUE,			/* Get value */
-	SET_VALUE,			/* Set value */
-	GET_METHOD_NAME,	/* Get a method's name */
-	GET_METHOD_PARAMS,	/* Get a method's parameters list (name and type) */
-	INVOKE_METHOD,		/* Remote method invocation */
-	IS_ITERABLE,		/* Check if entrypoint is iterable */
-	GET_ITERABLE,		/* Retrieve an interable */
-	GET_ITERABLE_ITEM,	/* Retrieve an item from an iterable */
-	PUSH_STRING,		/* Push a string as a new entrypoint */
-	PUSH_INT,			/* Push an integer as a new entrypoint */
-	PUSH_BOOLEAN,		/* Push a boolean as a new entrypoint */
-	PUSH,				/* Push an existing entrypoint as a new entrypoint */
-	LIST_MACROS,		/* List deployed macros */
-	FILTER_MACROS,		/* Filter macros based on a given object type */
-	GET_MACRO_PARAMS,	/* Retrieve a macro's parameters list (types and names) */
-	RUN_MACRO,			/* Run a macro in a remote application */
-	LOAD_MACRO			/* Dynamically load a macro in a remote application */
-};
 
 /**
  * RPC Message class
@@ -52,39 +30,17 @@ public class Request {
 	/**
 	 * Request's parameters. Not all of them will be deserialized. 
 	 */
-	
-	public class Parameters {
-		public String entrypoint;
-		public int[] path;
-		public int macro;
-		public int[] params;
-		public int intval;
-		public String strval;
-		public int item;
-		public byte[] dex;
-	}
-	
-	public RequestMethod method;
-	public Parameters parameters;
-	
-	/**
-	 * Retrieve request's method.
-	 * 
-	 * @return Request's method
-	 */
-	
-	public RequestMethod getMethod() {
-		return this.method;
-	}
-	
-	/**
-	 * Retrieve request parameters
-	 * 
-	 * @return a Request.Parameters instance
-	 */
-	
-	public Parameters getParameters() {
-		return this.parameters;
+
+	public String app;
+	public String method;
+	public Object[] parameters;
+	public Class[] paramTypes;
+		
+	public Request(String app, String method, Object[] parameters, Class[] paramTypes) {
+		this.app = app;
+		this.method = method;
+		this.parameters = parameters;
+		this.paramTypes = paramTypes;
 	}
 	
 	/**
@@ -93,8 +49,62 @@ public class Request {
 	 * @return a Request instance built from the provided json data
 	 */
 	public static Request fromJson(String json) {
-		GsonBuilder gsonb = new GsonBuilder();
-		Gson gson = gsonb.create();
-		return gson.fromJson(json, Request.class);
+		int i;
+		Gson gson = new Gson();
+		
+		/* Parse message */
+		JsonParser parser = new JsonParser();
+		
+		try {
+		    JsonArray array = parser.parse(json).getAsJsonArray();
+		    
+		    /* Must have at least 2 parameters */
+		    if (array.size()<2)
+		    	return null;
+		    
+		    /* Extract method */
+		    Log.d("Request", "Parameters:"+String.valueOf(array.size()-2));
+		    String pkg = gson.fromJson(array.get(0), String.class);
+		    String method = gson.fromJson(array.get(1), String.class);
+		    Object[] parameters = null;
+		    
+		    if (method.equals("listApps"))
+		    	return new Request(pkg, "listApps", new Object[0], new Class[0]);
+		    else if (method.equals("connectApp"))
+		    	return new Request(pkg, "connectApp", new Object[0], new Class[0]);
+		    else
+		    {
+			    /* Check if method exists and retrieve parameters type */
+			    Method[] methods = IInspectionService.class.getMethods();
+			    for (Method m : methods)
+			    {
+			    	if ( m.getName().equals(method) && (m.getParameterTypes().length == (array.size()-2)))
+			    	{
+			    		/* Allocate memory */
+			    		parameters = new Object[array.size()-2];
+			    		
+			    		/* Try to unserialize */
+			    		try
+			    		{
+			    			for (i=0; i<(array.size()-2); i++)
+			    				parameters[i] = gson.fromJson(array.get(i+2), m.getParameterTypes()[i]);
+			    			return new Request(pkg, method, parameters, m.getParameterTypes());
+			    		}
+			    		catch (JsonSyntaxException e)
+			    		{
+			    		}
+			    	}
+			    }
+		    }
+		    
+		    /* Unable to find a method */
+		    return null;
+			    
+		}
+		catch (JsonSyntaxException e)
+		{
+			/* Syntax error, return null */
+			return null;
+		}
 	}
 }
