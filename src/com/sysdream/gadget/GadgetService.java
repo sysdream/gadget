@@ -105,7 +105,7 @@ public class GadgetService extends Service implements IGadgetService {
 					resp = new Response(pkgs.toArray(new String[]{}), true);
 				}
 				else if (req.method.equals("connectApp")) {
-					GadgetService.attachToApp(GadgetService.this.getApplicationContext(), req.app);
+					GadgetService.attachToApp(GadgetService.this.getBaseContext(), req.app);
 					resp = new Response(req.app, true);
 				}
 				else
