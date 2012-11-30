@@ -1,6 +1,7 @@
 import socket
 import json
 import struct
+from types import *
 
 """
 Helpers
@@ -16,7 +17,8 @@ Java types hierarchy helpers
 JAVA_TYPES_EQ = {
     u'java.lang.CharSequence':[
         u'java.lang.String'
-    ]
+    ],
+    u'java.lang.Boolean':[u'boolean']
 }
 
 def is_equivalent(t1, t2):
@@ -80,7 +82,7 @@ class RpcRequest:
         request = self.toJson()
         return struct.pack('>I',len(request))+request
 
-class EntryPoint:
+class EntryPoint(object):
     """
     Entrypoint model
 
@@ -145,14 +147,40 @@ class EntryPoint:
         """
         return self._clazz_name
 
-    def get_index(self):
+    def get_root_index(self):
         """
         Get entrypoint index
         """
         return self._index
 
+    def get_index(self):
+        return self._path[-1]
+
     def __eq__(self, other):
         return ((self._instance_name == other.get_name()) and (self._clazz_name == other.get_class()))
+
+    def __setattr__(self, attr, value):
+        """
+        Set field value
+        """
+        if attr not in ['_fields','_methods', '_gadget', '_path', '_index', '_clazz_name', '_instance_name']:
+            self.list_fields()
+            for field in self._fields:
+                if attr == field.get_name():
+                    '''
+                    Field(
+                        field.get_name(),
+                        field.get_class(),
+                        self._index,
+                        self._path + [field.get_index()],
+                        self._gadget
+                    ).set_value(value)
+                    '''
+                    field.set_value(value)
+                    return True
+            return False
+        else:
+            return object.__setattr__(self, attr, value)
 
     def __getattr__(self, attr):
         """
@@ -176,23 +204,21 @@ class EntryPoint:
                     self._index,
                     self._path+[field.get_index()],
                     self._gadget
-                ).get_value()
+                )
+
         self.list_methods()
-        candidates = []
         for method in self._methods:
             if attr == method.get_name():
-                candidates.append(method)
-        if len(candidates)>0:
-                return VirtualMethod(self, candidates, self._gadget)
+                return VirtualMethod(self, attr, self._gadget)
         raise AttributeError()
 
     @staticmethod
-    def fromString(entrypoint, index, gadget):
+    def fromString(entrypoint, index, path, gadget):
         """
         Parse Entrypoint from string (as returned by Fino's injected service)
         """
         raw = entrypoint.split(':')
-        return EntryPoint(trim(raw[0]), trim(raw[1]), index, [], gadget)
+        return EntryPoint(trim(raw[0]), trim(raw[1]), index, path, gadget)
 
 class VirtualMethod:
     """
@@ -202,39 +228,21 @@ class VirtualMethod:
     method polymorphism. 
     """
 
-    def __init__(self, ep, methods, gadget):
+    def __init__(self, ep, method, gadget):
         self._ep = ep
-        self._methods = methods
+        self._method = method
         self._gadget = gadget
 
     def __call__(self, *args):
         """
-        Select on-the-fly one method from a set of methods
-
-        @raise AttributeError if the required attribute is not found
-        @return Call result
+        Perform a call by name
         """
-        types = []
-        for method in self._methods:
-            types.append(method.get_param_types())
-
-        # compute param types for target method
-        arg_types = []
-        for ep_index in args:
-            entrypoint = self._gadget.get_entrypoint(ep_index)
-            arg_types.append(entrypoint.get_class())
-        
-        for index,candidate in enumerate(types):
-            if len(candidate)==len(arg_types):
-                i = 0
-                for t1 in candidate:
-                    for t2 in arg_types:
-                        if not is_equivalent(t1,t2):
-                            break
-                        i += 1
-                if i==len(candidate):
-                    return self._methods[index](*args)
-        raise InvocationError()
+        result = self._gadget.invokeByName(self._ep, self._method, *args)
+        if result == -2:
+            raise InvocationError()
+        else:
+            self._gadget.sync_entrypoints()
+            return self._gadget.get_entrypoint(result)
 
 
 class Method:
@@ -328,11 +336,28 @@ class Field(EntryPoint):
         EntryPoint.__init__(self, name, clazz, index, path=path, gadget=gadget)
         self._gadget = gadget
 
+    def __repr__(self):
+        return self.get_value()
+
+    def __str__(self):
+        return str(self.get_value())
+
     def get_value(self):
         """
         Get field's value
         """
         return self._gadget.get_value(self)
+
+    def set_value(self, value):
+        """
+        Set field's value
+        """
+        return self._gadget.set_value(self, value)
+
+    @staticmethod
+    def fromString(field, index, path, gadget):
+        raw = field.split(':')
+        return Field(trim(raw[0]), trim(raw[1]), index, path, gadget)
 
 class RpcResponse:
     """
@@ -361,6 +386,8 @@ class RpcResponse:
         Wrap the response inside an instance of this class
         """
         _obj = json.loads(raw_json)
+        if 'response' not in _obj:
+            _obj['response'] = None
         return RpcResponse(_obj['success'], _obj['response'])
 
 class GadgetWrapper:
@@ -508,9 +535,57 @@ class GadgetWrapper:
         response = self._send_request(RpcRequest(self.target, 'getEntryPoints'))
         if response is not None:
             if response.is_success():
-                self.ep_stack = [EntryPoint.fromString(ep,index, self) for index,ep in enumerate(response.get_response())]
+                self.ep_stack = [EntryPoint.fromString(ep, index, [], self) for index,ep in enumerate(response.get_response())]
                 return self.ep_stack
         return None
+
+    def push_str(self, s):
+        self.ensure_attached()
+        response = self._send_request(RpcRequest(self.target, 'pushString', s))
+        if response is not None:
+            if response.is_success():
+                self.sync_entrypoints()
+                return self.get_entrypoint(int(response.get_response()))
+        return None
+
+    def push_int(self, i):
+        self.ensure_attached()
+        response = self._send_request(RpcRequest(self.target, 'pushInt', i))
+        if response is not None:
+            if response.is_success():
+                self.sync_entrypoints()
+                return self.get_entrypoint(int(response.get_response()))
+        return None
+
+    def push_bool(self, b):
+        self.ensure_attached()
+        response = self._send_request(RpcRequest(self.target, 'pushBoolean', b))
+        if response is not None:
+            if response.is_success():
+                self.sync_entrypoints()
+                return self.get_entrypoint(int(response.get_response()))
+        return None
+
+    def push_ep(self, ep):
+        self.ensure_attached()
+        response = self._send_request(RpcRequest(self.target, 'push', ep.get_index(), ep.get_path()))
+        if response is not None:
+            if response.is_success():
+                self.sync_entrypoints()
+                return self.get_entrypoint(int(response.get_response()))
+        return None
+
+    def push(self, obj):
+        if type(obj) is IntType:
+            return self.push_int(obj)
+        elif type(obj) is StringType:
+            return self.push_str(obj)
+        elif type(obj) is BooleanType:
+            return self.push_bool(obj)
+        elif isinstance(obj, EntryPoint):
+            return self.push_ep(obj)
+        else:
+            return None
 
     def filter_entrypoints(self, clazz):
         """
@@ -529,10 +604,10 @@ class GadgetWrapper:
         Retrieve fields of a given EntryPoint accessible from path.
         """
         self.ensure_attached()
-        response = self._send_request(RpcRequest(self.target, 'getFields', ep.get_index(), ep.get_path()))
+        response = self._send_request(RpcRequest(self.target, 'getFields', ep.get_root_index(), ep.get_path()))
         if response is not None:
             if response.is_success():
-                return [Field.fromString(field, index, self) for index,field in enumerate(response.get_response())]
+                return [Field.fromString(field, ep.get_root_index(), ep.get_path()+[index], self) for index,field in enumerate(response.get_response())]
         return None
 
     def get_methods(self, ep):
@@ -540,7 +615,7 @@ class GadgetWrapper:
         Retrieve methods of a given EP accessible from path
         """
         self.ensure_attached()
-        response = self._send_request(RpcRequest(self.target, 'getMethods', ep.get_index(), ep.get_path()))
+        response = self._send_request(RpcRequest(self.target, 'getMethods', ep.get_root_index(), ep.get_path()))
         if response is not None:
             if response.is_success():
                 return [Method.fromString(method, ep, index, self) for index,method in enumerate(response.get_response())]
@@ -551,7 +626,24 @@ class GadgetWrapper:
         Get method params
         """
         self.ensure_attached()
-        response = self._send_request(RpcRequest(self.target,'getMethodParams', ep.get_index(), ep.get_path(), method.get_index(), []))
+        response = self._send_request(RpcRequest(self.target,'getMethodParams', ep.get_root_index(), ep.get_path(), method.get_index(), []))
+        if response is not None:
+            if response.is_success():
+                return response.get_response()
+        return None
+
+    def set_value(self, ep, value):
+        """
+        Set a field's value
+        
+        @param ep Field the field
+        @param value int EntryPoint to use as a value
+        @return bool True on success, False otherwise
+        """
+        self.ensure_attached()
+        val_ep = self.push(value)
+        #print 'value ep: ',val_ep.get_root_index()
+        response = self._send_request(RpcRequest(self.target, 'setValue', ep.get_root_index(), ep.get_path(), val_ep.get_root_index()))
         if response is not None:
             if response.is_success():
                 return response.get_response()
@@ -565,22 +657,21 @@ class GadgetWrapper:
         @return the value
         """
         self.ensure_attached()
-        response = self._send_request(RpcRequest(self.target, 'getValue', ep.get_index(), ep.get_path()))
+        response = self._send_request(RpcRequest(self.target, 'getValue', ep.get_root_index(), ep.get_path()))
         if response is not None:
             if response.is_success():
                 return response.get_response()
         return None
 
-    def set_value(self, ep, value):
+    def invokeByName(self, ep, method, *args):
         """
-        Set a field's value
-
-        @param ep Field the field
-        @param value int EntryPoint index
+        Remote method invocation by name
         """
         self.ensure_attached()
-        print ep.get_path()
-        response = self._send_request(RpcRequest(self.target, 'setValue', ep.get_index(), ep.get_path(), value))
+        eps = []
+        for arg in args:
+            eps.append(self.push(arg).get_root_index())
+        response = self._send_request(RpcRequest(self.target, "invokeMethodByName", ep.get_root_index(), ep.get_path(), method, eps))
         if response is not None:
             if response.is_success():
                 return response.get_response()
@@ -596,7 +687,7 @@ class GadgetWrapper:
         @return call result
         """
         self.ensure_attached()
-        response = self._send_request(RpcRequest(self.target, 'invokeMethod', ep.get_index(), ep.get_path(), method.get_index(), args))
+        response = self._send_request(RpcRequest(self.target, 'invokeMethod', ep.get_root_index(), ep.get_path(), method.get_index(), args))
         if response is not None:
             if response.is_success():
                 return response.get_response()
