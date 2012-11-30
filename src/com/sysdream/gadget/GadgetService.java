@@ -28,8 +28,12 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.os.AsyncTask;
 import android.os.Binder;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+
 import android.util.Log;
 
 public class GadgetService extends Service implements IGadgetService {
@@ -39,6 +43,8 @@ public class GadgetService extends Service implements IGadgetService {
 	public GadgetServiceBinder binder = null;
 	private static ServerThread server_thread = null;
 	private static ConcurrentHashMap<String, IInspectionService> inspectionServices = new ConcurrentHashMap<String, IInspectionService>();
+	private static Handler handler = null;
+	private static ServiceConnection connection = null;
 	
 	public class ClientThread extends Thread {
 
@@ -51,6 +57,44 @@ public class GadgetService extends Service implements IGadgetService {
 		private int msg_type = 0;
 		private boolean m_running = false;
 		private ServerThread m_parent = null;
+		
+		public class AsyncInvoke extends AsyncTask<String, Integer, String> {
+
+			private Request req;
+			
+			public AsyncInvoke(Request req) {
+				this.req = req;
+			}
+			
+			protected void onPostExecute(String result) {
+				Method m;
+				Log.d(TAG,"Post execute");
+				final IInspectionService service = GadgetService.getAppService(this.req.app);
+				try {
+					m = IInspectionService.class.getMethod(req.method, req.paramTypes);
+					if (req.parameters.length == 0)
+						ClientThread.this.sendResponse(new Response(m.invoke(service), true));
+					else
+						ClientThread.this.sendResponse(new Response(m.invoke(service, req.parameters), true));
+				} catch (NoSuchMethodException e) {
+					ClientThread.this.sendResponse(new Response("Method does not exist", false));
+				} catch (IllegalArgumentException e) {
+					ClientThread.this.sendResponse(new Response("Illegal argument", false));
+				} catch (IllegalAccessException e) {
+					ClientThread.this.sendResponse(new Response("Illegal access", false));
+				} catch (InvocationTargetException e) {
+					ClientThread.this.sendResponse(new Response("Invocation error", false));
+				}
+			}
+
+
+			@Override
+			protected String doInBackground(String... params) {
+				Log.d(TAG,"Backgroung ...");
+				return null;
+			}
+			
+		}
 		
 		public ClientThread(Socket client, ServerThread parent) {
 			this.client = client;
@@ -87,7 +131,7 @@ public class GadgetService extends Service implements IGadgetService {
 			return null;
 		}
 		
-		public boolean processRequest(Request req) {
+		public boolean processRequest(final Request req) {
 			Response resp = new Response(null, false);
 			
 			if (req == null)
@@ -102,38 +146,50 @@ public class GadgetService extends Service implements IGadgetService {
 							.queryIntentServices(i, 0)) {
 						pkgs.add(r.serviceInfo.packageName);
 					}
-					resp = new Response(pkgs.toArray(new String[]{}), true);
+					return this.sendResponse(new Response(pkgs.toArray(new String[]{}), true));
 				}
 				else if (req.method.equals("connectApp")) {
-					GadgetService.attachToApp(GadgetService.this.getBaseContext(), req.app);
-					resp = new Response(req.app, true);
+					GadgetService.attachToApp(GadgetService.this.getApplicationContext(), req.app);
+					return this.sendResponse(new Response(req.app, true));
 				}
 				else
 				{
 					/* Do some introspection to call our remote method */
-					Method m;
+					final Method m;
 					try {
 						m = IInspectionService.class.getMethod(req.method, req.paramTypes);
-						IInspectionService service = GadgetService.getAppService(req.app);
+						final IInspectionService service = GadgetService.getAppService(req.app);
 						if (service != null)
-							if (req.parameters.length==0)
-								resp = new Response(m.invoke(service), true);
+						{
+							if (req.parameters.length == 0)
+								this.sendResponse(new Response(m.invoke(service), true));
 							else
-								resp = new Response(m.invoke(service, req.parameters), true);
+								this.sendResponse(new Response(m.invoke(service, req.parameters), true));
+							return true;
+						}
 						else
 							resp = new Response("Service not found", false);
 					} catch (NoSuchMethodException e) {
 						resp = new Response("Method does not exist", false);
 					} catch (IllegalArgumentException e1) {
 						resp = new Response("Illegal argument", false);
-					} catch (IllegalAccessException e1) {
-						resp = new Response("Cannot access method", false);
-					} catch (InvocationTargetException e1) {
-						resp = new Response("Cannot invoke method", false);
-					}					
+					} catch (IllegalAccessException e) {
+						resp = new Response("Illegal access", false);
+					} catch (InvocationTargetException e) {
+						resp = new Response("Invocation error", false);
+						e.printStackTrace();
+					}			
+					
+					if (resp != null)
+						return this.sendResponse(resp);
+					else
+						return false;
 				}
 			}
-				
+			return false;
+		}
+
+		public boolean sendResponse(Response resp) {
 			/* Send response */
 			try {
 				sock_out.write(resp.toRaw());
@@ -273,7 +329,7 @@ public class GadgetService extends Service implements IGadgetService {
 				return service.getPort();
 			return -1;
 		}
-		
+				
 		public IGadgetService getService() {
 			return service;
 		}
@@ -283,16 +339,28 @@ public class GadgetService extends Service implements IGadgetService {
 	public void onCreate() {
 		super.onCreate();
 		this.binder = new GadgetServiceBinder(this); 
+		handler = new Handler(Looper.getMainLooper());
 	}
 	
 	public void OnDestroy() {
 		super.onDestroy();
-		Log.d("Service", "Service destroyed");
+		this.unbindService(connection);
 	}
 
-	public static synchronized void registerAppService(String appPkg, IInspectionService service) {
-		if (!GadgetService.inspectionServices.containsKey(appPkg))
-			GadgetService.inspectionServices.put(appPkg, service);
+	public static synchronized boolean isRegisteredAppService(String appPkg) {
+		return inspectionServices.containsKey(appPkg);
+	}
+	
+	public static synchronized void registerAppService(Context context, String appPkg, IInspectionService service) {
+		if (GadgetService.inspectionServices.containsKey(appPkg))
+		{
+			try {
+				if (connection != null)
+					context.unbindService(connection);
+			} catch (Exception e) {
+			}
+		}
+		GadgetService.inspectionServices.put(appPkg, service);
 	}
 	
 	public static synchronized void unregisterAppService(String appPkg) {
@@ -307,14 +375,14 @@ public class GadgetService extends Service implements IGadgetService {
 			return null;
 	}
 	
-	public static void attachToApp(Context context, final String appPkg) {
+	public static void attachToApp(final Context context, final String appPkg) {
 		ServiceConnection mConnection = new ServiceConnection() {
 		    // Called when the connection with the service is established
 		    public void onServiceConnected(ComponentName className, IBinder service) {
 		        // Following the example above for an AIDL interface,
 		        // this gets an instance of the IRemoteInterface, which we can use to call on the service
 		    	Log.d(GadgetService.TAG, "Connected to " + appPkg);
-		        GadgetService.registerAppService(appPkg, IInspectionService.Stub.asInterface(service));
+		        GadgetService.registerAppService(context, appPkg, IInspectionService.Stub.asInterface(service));
 		    }
 
 		    // Called when the connection with the service disconnects unexpectedly
@@ -330,7 +398,7 @@ public class GadgetService extends Service implements IGadgetService {
 		Log.d(TAG, "Connecting to application "+appPkg);
 		context.bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
 
-		/* Thenlaunch application */
+		/* Then launch application */
 		Intent i = new Intent();
 		PackageManager manager = context.getPackageManager();
 		i = manager.getLaunchIntentForPackage(appPkg);
@@ -339,8 +407,6 @@ public class GadgetService extends Service implements IGadgetService {
 			i.addCategory(Intent.CATEGORY_LAUNCHER);
 			context.startActivity(i);
 		}
-		
-
 	}
 	
 	public void startServer(String address, int port, int mode) {
@@ -382,6 +448,7 @@ public class GadgetService extends Service implements IGadgetService {
 	public IBinder onBind(Intent intent) {
 		return this.binder;
 	}
+
 }
 
 
