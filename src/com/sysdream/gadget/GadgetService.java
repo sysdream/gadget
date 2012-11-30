@@ -33,7 +33,6 @@ import android.os.Binder;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-
 import android.util.Log;
 
 public class GadgetService extends Service implements IGadgetService {
@@ -212,9 +211,13 @@ public class GadgetService extends Service implements IGadgetService {
             			/* Convert size bytes to real size int */
             			size = ByteBuffer.wrap(new String(size_buf).getBytes()).getInt();
             			/* Process message */
+<<<<<<< HEAD
             			Request req = this.readRequest(0, size);
             			if (req != null)
             				this.processRequest(req);
+=======
+            			this.readMessage(0, size);
+>>>>>>> 78f85900803ae936624f4738ce906b73a729268e
             		}
             		else if (nbread < 0)
             			break;
@@ -329,7 +332,11 @@ public class GadgetService extends Service implements IGadgetService {
 				return service.getPort();
 			return -1;
 		}
+<<<<<<< HEAD
 				
+=======
+		
+>>>>>>> 78f85900803ae936624f4738ce906b73a729268e
 		public IGadgetService getService() {
 			return service;
 		}
@@ -339,11 +346,15 @@ public class GadgetService extends Service implements IGadgetService {
 	public void onCreate() {
 		super.onCreate();
 		this.binder = new GadgetServiceBinder(this); 
+<<<<<<< HEAD
 		handler = new Handler(Looper.getMainLooper());
+=======
+>>>>>>> 78f85900803ae936624f4738ce906b73a729268e
 	}
 	
 	public void OnDestroy() {
 		super.onDestroy();
+<<<<<<< HEAD
 		this.unbindService(connection);
 	}
 
@@ -409,6 +420,11 @@ public class GadgetService extends Service implements IGadgetService {
 		}
 	}
 	
+=======
+		Log.d("Service", "Service destroyed");
+	}
+
+>>>>>>> 78f85900803ae936624f4738ce906b73a729268e
 	public void startServer(String address, int port, int mode) {
 		if (this.server_thread == null)
 		{
@@ -443,12 +459,18 @@ public class GadgetService extends Service implements IGadgetService {
 		return 0;
 	}
 
+<<<<<<< HEAD
 	
+=======
+>>>>>>> 78f85900803ae936624f4738ce906b73a729268e
 	@Override
 	public IBinder onBind(Intent intent) {
 		return this.binder;
 	}
+<<<<<<< HEAD
 
+=======
+>>>>>>> 78f85900803ae936624f4738ce906b73a729268e
 }
 
 
