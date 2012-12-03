@@ -621,6 +621,17 @@ class GadgetWrapper:
                 return [Method.fromString(method, ep, index, self) for index,method in enumerate(response.get_response())]
         return None
 
+    def get_classes(self, ep):
+        """
+        Retrieve declared classes of a given EP accessible from path
+        """
+        self.ensure_attached()
+        response = self._send_request(RpcRequest(self.target, 'getClasses', ep.get_root_index(), ep.get_path()))
+        if response is not None:
+            if response.is_success():
+                return response.get_response()
+        return None
+
     def get_method_params(self, ep, method):
         """
         Get method params
@@ -688,6 +699,23 @@ class GadgetWrapper:
         """
         self.ensure_attached()
         response = self._send_request(RpcRequest(self.target, 'invokeMethod', ep.get_root_index(), ep.get_path(), method.get_index(), args))
+        if response is not None:
+            if response.is_success():
+                return response.get_response()
+        return None
+
+    def newInstance(self, clazz, params):
+        """
+        Create new instance
+
+        @param clazz Class name
+        @return new instance
+        """
+        self.ensure_attached()
+        eps = []
+        for param in params:
+            eps.append(self.push(param).get_root_index())
+        response = self._send_request(RpcRequest(self.target, 'newInstance', clazz, eps))
         if response is not None:
             if response.is_success():
                 return response.get_response()
