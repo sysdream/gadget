@@ -1,25 +1,21 @@
 package com.sysdream.gadget;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.io.OutputStreamWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketAddress;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.sysdream.fino.IInspectionService;
+/*
+ * Android imports
+ */
 
 import android.app.Service;
 import android.content.ComponentName;
@@ -35,7 +31,22 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
 
+/**
+ *  Fino's inspection service interface
+ */
+import com.sysdream.fino.IInspectionService;
+
+
+/**
+ * Gadget service
+ * 
+ * This service offers a TCP server able to forward API calls to a given
+ * remote Fino service running in another Android application. This service
+ * must be used with our Python's libfino TCP client.
+ */
+
 public class GadgetService extends Service implements IGadgetService {
+
 
 	private static String TAG = "GadgetService";
 	private static ServerSocket server = null;
@@ -44,6 +55,12 @@ public class GadgetService extends Service implements IGadgetService {
 	private static ConcurrentHashMap<String, IInspectionService> inspectionServices = new ConcurrentHashMap<String, IInspectionService>();
 	private static Handler handler = null;
 	private static ServiceConnection connection = null;
+	
+	/**
+	 * ClientThread
+	 * 
+	 * Process messages coming from a connected client.
+	 */
 	
 	public class ClientThread extends Thread {
 
@@ -57,54 +74,33 @@ public class GadgetService extends Service implements IGadgetService {
 		private boolean m_running = false;
 		private ServerThread m_parent = null;
 		
-		public class AsyncInvoke extends AsyncTask<String, Integer, String> {
-
-			private Request req;
-			
-			public AsyncInvoke(Request req) {
-				this.req = req;
-			}
-			
-			protected void onPostExecute(String result) {
-				Method m;
-				Log.d(TAG,"Post execute");
-				final IInspectionService service = GadgetService.getAppService(this.req.app);
-				try {
-					m = IInspectionService.class.getMethod(req.method, req.paramTypes);
-					if (req.parameters.length == 0)
-						ClientThread.this.sendResponse(new Response(m.invoke(service), true));
-					else
-						ClientThread.this.sendResponse(new Response(m.invoke(service, req.parameters), true));
-				} catch (NoSuchMethodException e) {
-					ClientThread.this.sendResponse(new Response("Method does not exist", false));
-				} catch (IllegalArgumentException e) {
-					ClientThread.this.sendResponse(new Response("Illegal argument", false));
-				} catch (IllegalAccessException e) {
-					ClientThread.this.sendResponse(new Response("Illegal access", false));
-				} catch (InvocationTargetException e) {
-					ClientThread.this.sendResponse(new Response("Invocation error", false));
-				}
-			}
-
-
-			@Override
-			protected String doInBackground(String... params) {
-				Log.d(TAG,"Backgroung ...");
-				return null;
-			}
-			
-		}
-		
+		/**
+		 * Constructor
+		 * 
+		 * @param client the socket client to use
+		 * @param parent parent's thread
+		 */
 		public ClientThread(Socket client, ServerThread parent) {
 			this.client = client;
 			this.m_parent = parent;
 			this.m_running = true;
 		}
 
+		
+		/**
+		 * Check if the thread is running
+		 * @return boolean True if running, false otherwise
+		 */
+		
 		public synchronized boolean isRunning() {
 			return m_running;
 		}
 
+		
+		/**
+		 * Kill the thread instance
+		 */
+		
 		public synchronized void kill() {
 			m_running = false;
 			try {
@@ -116,8 +112,14 @@ public class GadgetService extends Service implements IGadgetService {
 		}
 
 		
-		private Request readRequest(int msg_type, int size) throws IOException {
-			int nbread = -1;
+		/**
+		 * Read an RPC request from the client socket and unserialize it (JSON based).
+		 * 
+		 * @param size Size of the raw request
+		 * @return Request the request read from the socket.
+		 */
+		
+		private Request readRequest(int size) throws IOException {
 			char[]raw_json = new char[size];
 			if (this.sock_in.read(raw_json, 0, size) == size)
 			{
@@ -130,6 +132,13 @@ public class GadgetService extends Service implements IGadgetService {
 			return null;
 		}
 		
+		
+		/**
+		 * Process request
+		 * @param req the request to process
+		 * @return False if the request cannot be processed, true otherwise
+		 */
+		
 		public boolean processRequest(final Request req) {
 			Response resp = new Response(null, false);
 			
@@ -137,23 +146,31 @@ public class GadgetService extends Service implements IGadgetService {
 				resp = new Response("Bad request", false);
 			else
 			{
+				/* Special request 'listApps', not implemented in Fino Service */
 				if (req.method.equals("listApps"))
 				{
+					/* Create a list of applications implementing "com.sysdream.fino.inspection" */
 					final ArrayList<String> pkgs = new ArrayList<String>();
 					final Intent i = new Intent("com.sysdream.fino.inspection");
 					for(final ResolveInfo r : getPackageManager()
 							.queryIntentServices(i, 0)) {
 						pkgs.add(r.serviceInfo.packageName);
 					}
+					
+					/* Send this list to the remote client */
 					return this.sendResponse(new Response(pkgs.toArray(new String[]{}), true));
 				}
 				else if (req.method.equals("connectApp")) {
+					/* Special request'connectApp', not implement in Fino Service */
+					/* Attach Gadget to the remote application (create it if needed) */
 					GadgetService.attachToApp(GadgetService.this.getApplicationContext(), req.app);
+					
+					/* Send response to the remote client */
 					return this.sendResponse(new Response(req.app, true));
 				}
 				else
 				{
-					/* Do some introspection to call our remote method */
+					/* Do some inspection to call our remote method */
 					final Method m;
 					try {
 						m = IInspectionService.class.getMethod(req.method, req.paramTypes);
@@ -169,25 +186,36 @@ public class GadgetService extends Service implements IGadgetService {
 						else
 							resp = new Response("Service not found", false);
 					} catch (NoSuchMethodException e) {
+						/* Method not found */
 						resp = new Response("Method does not exist", false);
 					} catch (IllegalArgumentException e1) {
+						/* Bad argument */
 						resp = new Response("Illegal argument", false);
 					} catch (IllegalAccessException e) {
+						/* Access exception */ 
 						resp = new Response("Illegal access", false);
 					} catch (InvocationTargetException e) {
+						/* Invocation error */
 						resp = new Response("Invocation error", false);
 						e.printStackTrace();
 					}			
 					
-					if (resp != null)
-						return this.sendResponse(resp);
-					else
-						return false;
+					/* Send response to the remote client */
+					return this.sendResponse(resp);
 				}
 			}
+			
+			/* Error */
 			return false;
 		}
 
+		
+		/**
+		 * Send a response to the remote client
+		 * @param resp the response to send
+		 * @return Boolean False if the response cannot be send, true otherwise 
+		 */
+		
 		public boolean sendResponse(Response resp) {
 			/* Send response */
 			try {
@@ -197,6 +225,13 @@ public class GadgetService extends Service implements IGadgetService {
 				return false;
 			}
 		}
+		
+		
+		/**
+		 * ClientThread's main loop
+		 * 
+		 * Read RPC messages from socket, process it and send response to the remote client
+		 */
 		
 		public void run() {  
 			int nbread = -1;
@@ -211,17 +246,19 @@ public class GadgetService extends Service implements IGadgetService {
             			/* Convert size bytes to real size int */
             			size = ByteBuffer.wrap(new String(size_buf).getBytes()).getInt();
             			/* Process message */
-            			Request req = this.readRequest(0, size);
+            			Request req = this.readRequest(size);
             			if (req != null)
             				this.processRequest(req);
             		}
             		else if (nbread < 0)
             			break;
                 }
+                /* Client socket closed */
                 this.client.close();
                 Log.d(TAG, "Client disconnected");
                 this.m_parent.onClientDisconnect(this);
         	} catch(SocketException sockerr) {
+        		/* Socket error */
         		Log.d(TAG, "Client socket closed");
         		this.m_parent.onClientDisconnect(this);
         	}
@@ -231,6 +268,15 @@ public class GadgetService extends Service implements IGadgetService {
         }       
 
 	}
+	
+	
+	/**
+	 * Server Thread
+	 * 
+	 * Manages the server socket. This class only implements a listening socket
+	 * 
+	 * TODO: Implements a remote connecting socket
+	 */
 	
 	public class ServerThread extends Thread {
 
@@ -245,6 +291,11 @@ public class GadgetService extends Service implements IGadgetService {
 			m_running = true;
 		}
 		
+		
+		/**
+		 * Kill this thread
+		 */
+		
 		public synchronized void kill() {
 			m_running = false;
 			try {
@@ -258,14 +309,32 @@ public class GadgetService extends Service implements IGadgetService {
 			this.interrupt();
 		}
 		
+		
+		/**
+		 * Check if this thread is running
+		 * @return boolean True if running, false otherwise
+		 */
+		
 		public synchronized boolean isRunning() {
 			return this.m_running;
 		}
 		
+		
+		/**
+		 * Constructor
+		 * @param port the port to listen on
+		 */
 	    public ServerThread(int port) {
 	    	this.port = port;
 	    }
 		
+	    
+	    /**
+	     * ServerThread's main loop
+	     * 
+	     * Create the socket, accept connections and wrap clients' sockets
+	     */
+	    
 	    public void run() {
 	    	ClientThread client = null;
 	    	
@@ -288,11 +357,22 @@ public class GadgetService extends Service implements IGadgetService {
 	         }
 	    }
 	    
+	    
+	    /**
+	     * Handles client disconnection
+	     * @param client the client thread
+	     */
+	    
 	    public void onClientDisconnect(ClientThread client) {
 	    	if (m_clients.contains(client))
 	    		m_clients.remove(client);
 	    }
 	}
+	
+	
+	/**
+	 * GadgetService binder
+	 */
 	
 	public class GadgetServiceBinder extends Binder {
 		private IGadgetService service = null;
@@ -346,9 +426,24 @@ public class GadgetService extends Service implements IGadgetService {
 		this.unbindService(connection);
 	}
 
+	
+	/**
+	 * Check if an application's service has already been registered
+	 * @param appPkg the target application service name
+	 * @return True if registered, false otherwise
+	 */
+	
 	public static synchronized boolean isRegisteredAppService(String appPkg) {
 		return inspectionServices.containsKey(appPkg);
 	}
+	
+	
+	/**
+	 * Register an connected application's service
+	 * @param context the target context
+	 * @param appPkg the application's name
+	 * @param service the remote service interface
+	 */
 	
 	public static synchronized void registerAppService(Context context, String appPkg, IInspectionService service) {
 		if (GadgetService.inspectionServices.containsKey(appPkg))
@@ -362,17 +457,40 @@ public class GadgetService extends Service implements IGadgetService {
 		GadgetService.inspectionServices.put(appPkg, service);
 	}
 	
+	
+	/**
+	 * Unregister an existing service
+	 * @param appPkg the target application
+	 */
+	
 	public static synchronized void unregisterAppService(String appPkg) {
 		if (!GadgetService.inspectionServices.containsKey(appPkg))
 			GadgetService.inspectionServices.remove(appPkg);
 	}
 	
+	
+	/**
+	 * Retrieve the connected service corresponding to a given application
+	 * @param appPkg the application name
+	 * @return IInspectionService the remote service interface (binder)
+	 */
 	public static synchronized IInspectionService getAppService(final String appPkg) {
 		if (GadgetService.inspectionServices.containsKey(appPkg))
 			return GadgetService.inspectionServices.get(appPkg);
 		else
 			return null;
 	}
+	
+	
+	/**
+	 * Attach GadgetService to a remote application. 
+	 * 
+	 * This method launches the remote Fino service implemented in the target application,
+	 * then launch the main activity once connected.
+	 * 
+	 * @param context the target context
+	 * @param appPkg the application's name
+	 */
 	
 	public static void attachToApp(final Context context, final String appPkg) {
 		ServiceConnection mConnection = new ServiceConnection() {
@@ -382,6 +500,16 @@ public class GadgetService extends Service implements IGadgetService {
 		        // this gets an instance of the IRemoteInterface, which we can use to call on the service
 		    	Log.d(GadgetService.TAG, "Connected to " + appPkg);
 		        GadgetService.registerAppService(context, appPkg, IInspectionService.Stub.asInterface(service));
+		        
+				/* Launch application only when the corresponding service is started */
+				Intent i = new Intent();
+				PackageManager manager = context.getPackageManager();
+				i = manager.getLaunchIntentForPackage(appPkg);
+				if (i != null)
+				{
+					i.addCategory(Intent.CATEGORY_LAUNCHER);
+					context.startActivity(i);
+				}
 		    }
 
 		    // Called when the connection with the service disconnects unexpectedly
@@ -396,17 +524,12 @@ public class GadgetService extends Service implements IGadgetService {
 		intent.setPackage(appPkg);
 		Log.d(TAG, "Connecting to application "+appPkg);
 		context.bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
-
-		/* Then launch application */
-		Intent i = new Intent();
-		PackageManager manager = context.getPackageManager();
-		i = manager.getLaunchIntentForPackage(appPkg);
-		if (i != null)
-		{
-			i.addCategory(Intent.CATEGORY_LAUNCHER);
-			context.startActivity(i);
-		}
 	}
+	
+	
+	/**
+	 * Start server thread if required.
+	 */
 	
 	public void startServer(String address, int port, int mode) {
 		if (this.server_thread == null)
@@ -417,6 +540,11 @@ public class GadgetService extends Service implements IGadgetService {
 		}
 	}
 
+	
+	/**
+	 * Stop server thread.
+	 */
+	
 	public void stopServer() {
 		Log.d("Service", "Stop service");
 		if (this.server_thread != null)
@@ -425,23 +553,35 @@ public class GadgetService extends Service implements IGadgetService {
 	}
 
 
+	/**
+	 * Get mode. Originally here to get info on the mode used (remote connect or server).
+	 */
+	
 	public int getMode() {
 		// TODO Auto-generated method stub
 		return 0;
 	}
 
 
+	/**
+	 * Get IP address of the remote debugger (when server is in reverse-connect mode)
+	 */
+	
 	public String getAddress() {
-		// TODO Auto-generated method stub
 		return null;
 	}
 
-
+	/**
+	 * Get server remote-connect port
+	 */
 	public int getPort() {
-		// TODO Auto-generated method stub
 		return 0;
 	}
 
+	/**
+	 * Handles service binding.
+	 */
+	
 	@Override
 	public IBinder onBind(Intent intent) {
 		return this.binder;
