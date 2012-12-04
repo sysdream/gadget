@@ -72,12 +72,13 @@ class EntryPoint(object):
     <code>MyEntrypoint.someMethod(3,2)</code>
     <code>print MyEntrypoint.mTitle</code>
     """
-    def __init__(self, instance, clazz, index, path=[], gadget=None):
+    def __init__(self, instance, clazz, index, path=[]):
         self._instance_name = instance
         self._clazz_name = clazz
+        self._type = None
         self._index = index
         self._path = path
-        self._gadget = gadget
+        self._gadget = Gadget.get_inst()
         self._fields = None
         self._methods = None
 
@@ -107,6 +108,9 @@ class EntryPoint(object):
             self._methods = self._gadget.get_methods(self)
         return self._methods
 
+    def get_gadget(self):
+        return self._gadget
+
     def get_name(self):
         """
         Get entrypoint name
@@ -125,6 +129,14 @@ class EntryPoint(object):
         """
         return self._clazz_name
 
+    def get_type(self):
+        """
+        Get enttypoint class name
+        """
+        if self._type is None:
+            self._type = self._gadget.get_type(self)
+        return self._type
+
     def get_root_index(self):
         """
         Get entrypoint index
@@ -141,19 +153,10 @@ class EntryPoint(object):
         """
         Set field value
         """
-        if attr not in ['_fields','_methods', '_gadget', '_path', '_index', '_clazz_name', '_instance_name']:
+        if attr not in ['_fields','_methods', '_gadget', '_path', '_index', '_clazz_name', '_instance_name', '_type']:
             self.list_fields()
             for field in self._fields:
                 if attr == field.get_name():
-                    '''
-                    Field(
-                        field.get_name(),
-                        field.get_class(),
-                        self._index,
-                        self._path + [field.get_index()],
-                        self._gadget
-                    ).set_value(value)
-                    '''
                     field.set_value(value)
                     return True
             return False
@@ -180,23 +183,22 @@ class EntryPoint(object):
                     field.get_name(),
                     field.get_class(),
                     self._index,
-                    self._path+[field.get_index()],
-                    self._gadget
+                    self._path+[field.get_index()]
                 )
 
         self.list_methods()
         for method in self._methods:
             if attr == method.get_name():
-                return VirtualMethod(self, attr, self._gadget)
+                return VirtualMethod(self, attr)
         raise AttributeError()
 
     @staticmethod
-    def fromString(entrypoint, index, path, gadget):
+    def fromString(entrypoint, index, path):
         """
         Parse Entrypoint from string (as returned by Fino's injected service)
         """
         raw = entrypoint.split(':')
-        return EntryPoint(trim(raw[0]), trim(raw[1]), index, path, gadget)
+        return EntryPoint(trim(raw[0]), trim(raw[1]), index, path)
 
 class VirtualMethod:
     """
@@ -206,10 +208,10 @@ class VirtualMethod:
     method polymorphism. 
     """
 
-    def __init__(self, ep, method, gadget):
+    def __init__(self, ep, method):
         self._ep = ep
         self._method = method
-        self._gadget = gadget
+        self._gadget = Gadget.get_inst()
 
     def __call__(self, *args):
         """
@@ -230,7 +232,7 @@ class Method:
     This class handles every operation related to an object's methods.
     """
 
-    def __init__(self, name, proto, ep, index, path=[], gadget=None):
+    def __init__(self, name, proto, ep, index, path=[]):
         """
         @param name string Method name
         @param proto string Method's prototype
@@ -244,7 +246,7 @@ class Method:
         self._ep = ep
         self._index = index
         self._path = path
-        self._gadget = gadget
+        self._gadget = Gadget.get_inst()
 
     def get_name(self):
         """
@@ -293,7 +295,7 @@ class Method:
         )
 
     @staticmethod
-    def fromString(method, ep, index, gadget):
+    def fromString(method, ep, index):
         """
         Instanciate a method from its string representation
 
@@ -302,7 +304,7 @@ class Method:
         @param gadget GadgetWrapper instance of GadgetWrapper
         """
         raw = method.split(':')
-        return Method(trim(raw[0]), trim(raw[1]), ep, index, [], gadget)
+        return Method(trim(raw[0]), trim(raw[1]), ep, index, [])
 
 class Field(EntryPoint):
     """
@@ -310,32 +312,35 @@ class Field(EntryPoint):
 
     This class inherits from EntryPoint and only add a get_value() method.
     """
-    def __init__(self, name, clazz, index, path=[], gadget=None):
-        EntryPoint.__init__(self, name, clazz, index, path=path, gadget=gadget)
-        self._gadget = gadget
+    def __init__(self, name, clazz, index, path=[]):
+        EntryPoint.__init__(self, name, clazz, index, path=path)
 
     def __repr__(self):
         return self.get_value()
-
-    def __str__(self):
-        return str(self.get_value())
 
     def get_value(self):
         """
         Get field's value
         """
-        return self._gadget.get_value(self)
+        if self.get_type() == 'java.lang.Integer':
+            return int(self.get_gadget().get_value(self))
+        elif self.get_type() == 'java.lang.String':
+            return str(self.get_gadget().get_value(self))
+        elif self.get_type() == 'java.lang.CharSequence':
+            return str(self.get_gadget().get_value(self))
+        else:
+            return self.get_gadget().get_value(self)
 
     def set_value(self, value):
         """
         Set field's value
         """
-        return self._gadget.set_value(self, value)
+        return self.get_gadget().set_value(self, value)
 
     @staticmethod
-    def fromString(field, index, path, gadget):
+    def fromString(field, index, path):
         raw = field.split(':')
-        return Field(trim(raw[0]), trim(raw[1]), index, path, gadget)
+        return Field(trim(raw[0]), trim(raw[1]), index, path)
 
 class RpcResponse:
     """
@@ -368,7 +373,22 @@ class RpcResponse:
             _obj['response'] = None
         return RpcResponse(_obj['success'], _obj['response'])
 
-class GadgetWrapper:
+
+class Class:
+    """
+    Expose remote class
+    """
+    def __init__(self, clazz):
+        self._gadget = Gadget.get_inst()
+        self._class_name = clazz
+
+    def new(self, *args):
+        return self._gadget.newInstance(self._class_name, args)
+
+    def get_name(self):
+        return self._class_name
+
+class Gadget:
     """
     This is a gadget connector that wraps the service
     operations.
@@ -377,7 +397,16 @@ class GadgetWrapper:
     with some magic added.
     """
 
-    def __init__(self, server='128.0.0.1', port=7777):
+    instance = None
+
+    @staticmethod
+    def get_inst(server='127.0.0.1', port=7777):
+        if Gadget.instance is None:
+            Gadget.instance = Gadget(server, port)
+        return Gadget.instance
+
+
+    def __init__(self, server='127.0.0.1', port=7777):
         self.server = server
         self.port = port
         self.sock = None
@@ -513,7 +542,7 @@ class GadgetWrapper:
         response = self._send_request(RpcRequest(self.target, 'getEntryPoints'))
         if response is not None:
             if response.is_success():
-                self.ep_stack = [EntryPoint.fromString(ep, index, [], self) for index,ep in enumerate(response.get_response())]
+                self.ep_stack = [EntryPoint.fromString(ep, index, []) for index,ep in enumerate(response.get_response())]
                 return self.ep_stack
         return None
 
@@ -585,7 +614,7 @@ class GadgetWrapper:
         response = self._send_request(RpcRequest(self.target, 'getFields', ep.get_root_index(), ep.get_path()))
         if response is not None:
             if response.is_success():
-                return [Field.fromString(field, ep.get_root_index(), ep.get_path()+[index], self) for index,field in enumerate(response.get_response())]
+                return [Field.fromString(field, ep.get_root_index(), ep.get_path()+[index]) for index,field in enumerate(response.get_response())]
         return None
 
     def get_methods(self, ep):
@@ -596,7 +625,7 @@ class GadgetWrapper:
         response = self._send_request(RpcRequest(self.target, 'getMethods', ep.get_root_index(), ep.get_path()))
         if response is not None:
             if response.is_success():
-                return [Method.fromString(method, ep, index, self) for index,method in enumerate(response.get_response())]
+                return [Method.fromString(method, ep, index) for index,method in enumerate(response.get_response())]
         return None
 
     def get_classes(self, ep):
@@ -605,6 +634,17 @@ class GadgetWrapper:
         """
         self.ensure_attached()
         response = self._send_request(RpcRequest(self.target, 'getClasses', ep.get_root_index(), ep.get_path()))
+        if response is not None:
+            if response.is_success():
+                return response.get_response()
+        return None
+
+    def get_type(self, ep):
+        """
+        Retrieve entrypoint's class name
+        """
+        self.ensure_attached()
+        response = self._send_request(RpcRequest(self.target, 'getType',ep.get_root_index(), ep.get_path()))
         if response is not None:
             if response.is_success():
                 return response.get_response()
@@ -696,5 +736,8 @@ class GadgetWrapper:
         response = self._send_request(RpcRequest(self.target, 'newInstance', clazz, eps))
         if response is not None:
             if response.is_success():
-                return response.get_response()
+                r = int(response.get_response())
+                if r>=0:
+                    self.sync_entrypoints()
+                    return self.get_entrypoint(r)
         return None
