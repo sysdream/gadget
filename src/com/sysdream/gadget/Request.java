@@ -63,7 +63,7 @@ public class Request {
 		    	return null;
 		    
 		    /* Extract method */
-		    Log.d("Request", "Parameters:"+String.valueOf(array.size()-2));
+		    //Log.d("Request", "Parameters:"+String.valueOf(array.size()-2));
 		    String pkg = gson.fromJson(array.get(0), String.class);
 		    String method = gson.fromJson(array.get(1), String.class);
 		    Object[] parameters = null;
@@ -92,6 +92,7 @@ public class Request {
 			    		}
 			    		catch (JsonSyntaxException e)
 			    		{
+                            e.printStackTrace();
 			    		}
 			    	}
 			    }
@@ -104,6 +105,7 @@ public class Request {
 		catch (JsonSyntaxException e)
 		{
 			/* Syntax error, return null */
+            e.printStackTrace();
 			return null;
 		}
 	}

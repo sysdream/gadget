@@ -1,6 +1,6 @@
 package com.sysdream.gadget;
 
-import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -12,6 +12,7 @@ import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
+
 
 /*
  * Android imports
@@ -30,6 +31,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import android.util.Base64;
 
 /**
  *  Fino's inspection service interface
@@ -66,9 +68,9 @@ public class GadgetService extends Service implements IGadgetService {
 
 		private final static String TAG ="CLIENT";
 		private Socket client = null;
-		private BufferedReader sock_in = null;
+		private InputStream sock_in = null;
 		private OutputStream sock_out = null;
-		private char[] size_buf = new char[4];
+		private byte[] size_buf = new byte[4];
 		private int size = 0;
 		private int msg_type = 0;
 		private boolean m_running = false;
@@ -120,16 +122,28 @@ public class GadgetService extends Service implements IGadgetService {
 		 */
 		
 		private Request readRequest(int size) throws IOException {
-			char[]raw_json = new char[size];
-			if (this.sock_in.read(raw_json, 0, size) == size)
-			{
-				/* Build the corresponding message based on the serialized data */
-				Log.d(TAG,"Got JSON: "+new String(raw_json));
-				Request req = Request.fromJson(new String(raw_json));
-				Log.d(TAG, "Got request "+req.method.toString());
-				return req;
-			}
-			return null;
+			byte[]raw_json = new byte[size];
+            int read = 0, got = 0;
+
+            while (read < size) {
+                /*Log.d(TAG, "Expecting " + (size-read) + " bytes");*/
+                got = this.sock_in.read(raw_json, read, size-read);
+                /*Log.d(TAG, "Got " + got + " bytes on " + size);*/
+                if (got < 0)
+                    return null;
+                read += got;
+            }
+
+			/* Build the corresponding message based on the serialized data */
+			/*Log.d(TAG,"Got JSON: "+new String(raw_json));*/
+			Request req = Request.fromJson(new String(raw_json));
+            /*
+            if (req != null)
+    			Log.d(TAG, "Got request "+req.method.toString());
+            else
+                Log.d(TAG, "Error parsing request");
+            */
+			return req;
 		}
 		
 		
@@ -237,14 +251,15 @@ public class GadgetService extends Service implements IGadgetService {
 			int nbread = -1;
         	try {
         		Log.d(TAG, "Handle client connection");
-        		this.sock_in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+        		this.sock_in = client.getInputStream();
         		this.sock_out = client.getOutputStream();
                 while (this.isRunning()) {
                 	nbread = this.sock_in.read(size_buf, 0, 4);
             		if (nbread == 4)
             		{
             			/* Convert size bytes to real size int */
-            			size = ByteBuffer.wrap(new String(size_buf).getBytes()).getInt();
+                        size = ByteBuffer.wrap(size_buf).getInt();
+
             			/* Process message */
             			Request req = this.readRequest(size);
             			if (req != null)
@@ -502,6 +517,7 @@ public class GadgetService extends Service implements IGadgetService {
 		        GadgetService.registerAppService(context, appPkg, IInspectionService.Stub.asInterface(service));
 		        
 				/* Launch application only when the corresponding service is started */
+                /*
 				Intent i = new Intent();
 				PackageManager manager = context.getPackageManager();
 				i = manager.getLaunchIntentForPackage(appPkg);
@@ -510,6 +526,7 @@ public class GadgetService extends Service implements IGadgetService {
 					i.addCategory(Intent.CATEGORY_LAUNCHER);
 					context.startActivity(i);
 				}
+                */
 		    }
 
 		    // Called when the connection with the service disconnects unexpectedly

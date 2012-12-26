@@ -26,7 +26,7 @@ public class Response {
 	
 	public byte[] toRaw() {
 		byte[] response = this.toJson();
-		Log.d("Response", "Size of response: "+String.valueOf(response.length));
+		//Log.d("Response", "Size of response: "+String.valueOf(response.length));
 		ByteBuffer b = ByteBuffer.allocate(4+response.length);
 		b.putInt(0, response.length);
 		b.position(4);
